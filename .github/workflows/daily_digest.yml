@@ -1,0 +1,85 @@
+name: Daily Newsletter Digest
+
+on:
+  schedule:
+    # Run at 6 AM EST every day (11 AM UTC)
+    - cron: '0 11 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  generate-digest:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write  # Need write access for commits
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Set up Gmail credentials
+      env:
+        GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
+      run: |
+        echo "$GMAIL_TOKEN" | base64 -d > token.json
+    
+    - name: Generate digest
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        DIGEST_EMAIL_RECIPIENT: ${{ secrets.DIGEST_EMAIL_RECIPIENT }}
+        GITHUB_PAGES_URL: ${{ secrets.GITHUB_PAGES_URL }}
+      run: |
+        python src/main.py
+    
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "digest-bot@github.com"
+        git config --local user.name "Newsletter Digest Bot"
+        git add docs/
+        git add newsletter_digest.db
+        git commit -m "📰 Daily digest: $(date +'%Y-%m-%d')" || echo "No changes to commit"
+        git push
+    
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      if: success()
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs
+        keep_files: true
+        commit_message: "Deploy digest: $(date +'%Y-%m-%d')"
+    
+    - name: Create summary
+      if: success()
+      run: |
+        echo "## 📰 Digest Generated Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Date**: $(date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_STEP_SUMMARY
+        echo "- **View**: [${{ secrets.GITHUB_PAGES_URL }}/$(date +'%Y-%m-%d').html](${{ secrets.GITHUB_PAGES_URL }}/$(date +'%Y-%m-%d').html)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Archive**: [${{ secrets.GITHUB_PAGES_URL }}](${{ secrets.GITHUB_PAGES_URL }})" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "## ❌ Digest Generation Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Check the logs above for details." >> $GITHUB_STEP_SUMMARY
